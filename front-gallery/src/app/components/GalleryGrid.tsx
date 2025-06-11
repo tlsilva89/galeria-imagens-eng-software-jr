@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { GalleryResponse } from "@/types/gallery";
 import { api } from "@/lib/api";
 import GalleryItem from "./GalleryItem";
@@ -28,17 +28,27 @@ export default function GalleryGrid({ initialData }: GalleryGridProps) {
     "all" | "active" | "inactive"
   >("all");
 
-  const fetchGalleries = async (page = 1, status = currentStatus) => {
-    setLoading(true);
-    try {
-      const newData = await api.getGalleries(page, 12, status);
-      setData(newData);
-    } catch (error) {
-      console.error("Erro ao buscar galerias:", error);
-    } finally {
-      setLoading(false);
+  // ✅ CORREÇÃO: useCallback para estabilizar a função fetchGalleries
+  const fetchGalleries = useCallback(
+    async (page = 1, status = currentStatus) => {
+      setLoading(true);
+      try {
+        const newData = await api.getGalleries(page, 12, status);
+        setData(newData);
+      } catch (error) {
+        console.error("Erro ao buscar galerias:", error);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currentStatus]
+  ); // currentStatus como dependência
+
+  useEffect(() => {
+    if (!initialData && data.galleries.length === 0) {
+      fetchGalleries();
     }
-  };
+  }, [initialData, data.galleries.length, fetchGalleries]);
 
   const handleStatusFilter = (status: "all" | "active" | "inactive") => {
     setCurrentStatus(status);
@@ -52,11 +62,6 @@ export default function GalleryGrid({ initialData }: GalleryGridProps) {
   const handleUpdate = () => {
     fetchGalleries(data.pagination.page, currentStatus);
   };
-
-  // Carregar dados iniciais se não foram fornecidos
-  if (!initialData && data.galleries.length === 0 && !loading) {
-    fetchGalleries();
-  }
 
   return (
     <div className="space-y-6 p-6">

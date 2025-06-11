@@ -96,23 +96,25 @@ export class GalleryController {
         return reply.status(400).send({ error: "Imagem é obrigatória" });
       }
 
-      // Corrigindo o acesso aos campos do multipart
+      // Acesso correto aos campos do multipart
       let title = "";
       if (data.fields && data.fields.title) {
         const titleField = data.fields.title;
         if (Array.isArray(titleField)) {
-          // Se é array, pega o primeiro elemento e acessa o valor
+          // Se é array, pega o primeiro elemento
           const firstField = titleField[0];
-          title =
-            typeof firstField === "object" && "value" in firstField
-              ? (firstField as any).value
-              : String(firstField);
+          if (typeof firstField === "object" && "value" in firstField) {
+            title = String(firstField.value);
+          } else {
+            title = String(firstField);
+          }
         } else {
           // Se não é array, verifica se tem propriedade value
-          title =
-            typeof titleField === "object" && "value" in titleField
-              ? (titleField as any).value
-              : String(titleField);
+          if (typeof titleField === "object" && "value" in titleField) {
+            title = String((titleField as { value: unknown }).value);
+          } else {
+            title = String(titleField);
+          }
         }
       }
 
@@ -140,6 +142,7 @@ export class GalleryController {
     }
   }
 
+  // Método update corrigido para funcionar com PUT
   async update(request: FastifyRequest, reply: FastifyReply) {
     try {
       const { id } = paramsSchema.parse(request.params);
@@ -153,26 +156,28 @@ export class GalleryController {
       }
 
       const data = await request.file();
-      let updateData: any = {};
+      const updateData: { title?: string; image?: string } = {};
 
       if (data) {
-        // Corrigindo o acesso aos campos do multipart
+        // Acesso correto aos campos do multipart
         let title = "";
         if (data.fields && data.fields.title) {
           const titleField = data.fields.title;
           if (Array.isArray(titleField)) {
-            // Se é array, pega o primeiro elemento e acessa o valor
+            // Se é array, pega o primeiro elemento
             const firstField = titleField[0];
-            title =
-              typeof firstField === "object" && "value" in firstField
-                ? (firstField as any).value
-                : String(firstField);
+            if (typeof firstField === "object" && "value" in firstField) {
+              title = String(firstField.value);
+            } else {
+              title = String(firstField);
+            }
           } else {
             // Se não é array, verifica se tem propriedade value
-            title =
-              typeof titleField === "object" && "value" in titleField
-                ? (titleField as any).value
-                : String(titleField);
+            if (typeof titleField === "object" && "value" in titleField) {
+              title = String((titleField as { value: unknown }).value);
+            } else {
+              title = String(titleField);
+            }
           }
         }
 
@@ -183,27 +188,41 @@ export class GalleryController {
           updateData.title = validatedTitle;
         }
 
-        // Processar nova imagem
-        const filename = `${Date.now()}-${Math.random()
-          .toString(36)
-          .substring(7)}.${data.filename?.split(".").pop()}`;
-        const filepath = path.join(process.cwd(), "uploads", filename);
+        // Processar nova imagem se fornecida
+        if (data.filename) {
+          const filename = `${Date.now()}-${Math.random()
+            .toString(36)
+            .substring(7)}.${data.filename.split(".").pop()}`;
+          const filepath = path.join(process.cwd(), "uploads", filename);
 
-        await pipeline(data.file, createWriteStream(filepath));
-        updateData.image = filename;
+          await pipeline(data.file, createWriteStream(filepath));
+          updateData.image = filename;
 
-        // Remover imagem antiga
-        try {
-          await unlink(
-            path.join(process.cwd(), "uploads", existingGallery.image)
-          );
-        } catch (error) {
-          console.log("Erro ao remover imagem antiga:", error);
+          // Remover imagem antiga
+          try {
+            await unlink(
+              path.join(process.cwd(), "uploads", existingGallery.image)
+            );
+          } catch (error) {
+            console.log("Erro ao remover imagem antiga:", error);
+          }
         }
       } else {
-        // Se não há arquivo, é apenas atualização de título
-        const { title } = updateGallerySchema.parse(request.body);
-        if (title) updateData.title = title;
+        // Se não há arquivo, tentar pegar título do body
+        const body = request.body as { title?: string };
+        if (body && body.title) {
+          const { title: validatedTitle } = updateGallerySchema.parse({
+            title: body.title,
+          });
+          updateData.title = validatedTitle;
+        }
+      }
+
+      // Verificar se há dados para atualizar
+      if (Object.keys(updateData).length === 0) {
+        return reply.status(400).send({
+          error: "Nenhum dado fornecido para atualização",
+        });
       }
 
       const gallery = await prisma.gallery.update({
@@ -218,6 +237,7 @@ export class GalleryController {
     }
   }
 
+  // Método delete corrigido para funcionar com DELETE
   async delete(request: FastifyRequest, reply: FastifyReply) {
     try {
       const { id } = paramsSchema.parse(request.params);
@@ -241,6 +261,7 @@ export class GalleryController {
         where: { id },
       });
 
+      // Retornar 204 No Content para DELETE bem-sucedido
       return reply.status(204).send();
     } catch (error) {
       console.error("Erro ao deletar galeria:", error);
@@ -248,6 +269,7 @@ export class GalleryController {
     }
   }
 
+  // Método toggleActive corrigido para funcionar com PATCH
   async toggleActive(request: FastifyRequest, reply: FastifyReply) {
     try {
       const { id } = paramsSchema.parse(request.params);

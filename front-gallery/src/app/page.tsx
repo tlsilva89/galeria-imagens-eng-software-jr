@@ -3,7 +3,7 @@ import GalleryGrid from "./components/GalleryGrid";
 import Header from "./components/Header";
 import Navbar from "./components/Navbar";
 
-export const revalidate = 60; // ISR - revalidar a cada 60 segundos
+export const revalidate = 60;
 
 export default async function Home() {
   try {
@@ -17,7 +17,9 @@ export default async function Home() {
       </main>
     );
   } catch (error) {
-    console.error("Erro ao carregar dados:", error);
+    console.error("Erro ao carregar dados iniciais:", error);
+
+    // ✅ CORREÇÃO: Renderizar sem dados iniciais em caso de erro
     return (
       <main>
         <Navbar />
