@@ -1,189 +1,274 @@
-import { createWriteStream, unlinkSync, existsSync } from "fs";
-import { pipeline } from "node:stream";
-import { promisify } from "node:util";
-import { extname, resolve } from "path";
-import { randomUUID } from "crypto";
+import { FastifyRequest, FastifyReply } from "fastify";
 import { prisma } from "../lib/prisma";
-import { countPage, pagination } from "../utils/pagination";
+import { z } from "zod";
+import { unlink } from "fs/promises";
+import path from "path";
+import { createWriteStream } from "fs";
+import { pipeline } from "stream/promises";
 
-const pump = promisify(pipeline);
+const createGallerySchema = z.object({
+  title: z.string().min(1, "Título é obrigatório"),
+});
 
-export const galleryCreate = async (request, reply) => {
-  const { title } = request.body;
+const updateGallerySchema = z.object({
+  title: z.string().min(1, "Título é obrigatório").optional(),
+});
 
-  try {
-    const galleryExist = await prisma.gallery.findFirst({
-      where: { title: String(title) },
-    });
+const paramsSchema = z.object({
+  id: z.string(),
+});
 
-    if (galleryExist) {
-      return reply.status(400).send({
-        error: "Bad Request",
-        message: "Já existe uma galeria com esse título",
+const querySchema = z.object({
+  page: z.string().optional().default("1"),
+  limit: z.string().optional().default("12"),
+  status: z.enum(["all", "active", "inactive"]).optional().default("all"),
+});
+
+export class GalleryController {
+  async list(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { page, limit, status } = querySchema.parse(request.query);
+
+      const pageNumber = parseInt(page);
+      const limitNumber = parseInt(limit);
+      const skip = (pageNumber - 1) * limitNumber;
+
+      const where =
+        status === "all"
+          ? {}
+          : status === "active"
+          ? { active: true }
+          : { active: false };
+
+      const [galleries, total] = await Promise.all([
+        prisma.gallery.findMany({
+          where,
+          skip,
+          take: limitNumber,
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.gallery.count({ where }),
+      ]);
+
+      const totalPages = Math.ceil(total / limitNumber);
+
+      return reply.send({
+        galleries,
+        pagination: {
+          page: pageNumber,
+          limit: limitNumber,
+          total,
+          totalPages,
+          hasNext: pageNumber < totalPages,
+          hasPrev: pageNumber > 1,
+        },
       });
+    } catch (error) {
+      console.error("Erro ao listar galerias:", error);
+      return reply.status(500).send({ error: "Erro interno do servidor" });
     }
-
-    const gallery = await prisma.gallery.create({
-      data: {
-        title,
-        filename: "",
-        url: "",
-      },
-    });
-
-    return reply.status(201).send({ message: "Galeria criada com sucesso", gallery });
-  } catch (error) {
-    return reply.status(500).send({
-      error: "Internal Server Error",
-      message: error.message,
-    });
   }
-};
 
-export const galleryUpload = async (request, reply) => {
-  const { galleryId } = request.params;
+  async getById(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { id } = paramsSchema.parse(request.params);
 
-  console.log('galleryId', galleryId)
-
-  try {
-    const gallery = await prisma.gallery.findFirst({
-      where: { id: Number(galleryId) },
-    });
-
-    if (!gallery) {
-      return reply.status(404).send({
-        error: "Not Found",
-        message: "Galeria não encontrada",
+      const gallery = await prisma.gallery.findUnique({
+        where: { id },
       });
-    }
 
-    const upload = await request.file({
-      limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB
-      },
-    });
-
-    if (!upload) {
-      return reply.status(400).send({
-        error: "Bad Request",
-        message: "Nenhum arquivo enviado",
-      });
-    }
-
-    if (gallery.filename) {
-      const oldFilePath = resolve(__dirname, "../../uploads/", gallery.filename);
-      if (existsSync(oldFilePath)) {
-        unlinkSync(oldFilePath);
+      if (!gallery) {
+        return reply.status(404).send({ error: "Galeria não encontrada" });
       }
+
+      return reply.send(gallery);
+    } catch (error) {
+      console.error("Erro ao buscar galeria:", error);
+      return reply.status(500).send({ error: "Erro interno do servidor" });
     }
-
-    const fileId = randomUUID();
-    const extension = extname(upload.filename);
-    const fileName = `${fileId}${extension}`;
-    const filePath = resolve(__dirname, "../../uploads/", fileName);
-
-    const writeStream = createWriteStream(filePath);
-    await pump(upload.file, writeStream);
-
-    const updatedGallery = await prisma.gallery.update({
-      where: { id: gallery.id },
-      data: {
-        filename: fileName,
-        url: `/uploads/${fileName}`,
-      },
-    });
-
-    return reply.status(200).send({
-      message: "Upload realizado com sucesso",
-      gallery: updatedGallery,
-    });
-  } catch (error) {
-    return reply.status(500).send({
-      error: "Internal Server Error",
-      message: error.message,
-    });
   }
-};
 
-export const galleryUpdate = async (request, reply) => {
-    const { galleryId } = request.params;
-    const { title } = request.body;
-
+  async create(request: FastifyRequest, reply: FastifyReply) {
     try {
-        const gallery = await prisma.gallery.findUnique({
-            where: { id: Number(galleryId) }
-        });
+      const data = await request.file();
 
-        if (!gallery) {
-            return reply.status(404).send({
-                error: "Not Found",
-                message: "Galeria não encontrada",
-            });
+      if (!data) {
+        return reply.status(400).send({ error: "Imagem é obrigatória" });
+      }
+
+      // Corrigindo o acesso aos campos do multipart
+      let title = "";
+      if (data.fields && data.fields.title) {
+        const titleField = data.fields.title;
+        if (Array.isArray(titleField)) {
+          // Se é array, pega o primeiro elemento e acessa o valor
+          const firstField = titleField[0];
+          title =
+            typeof firstField === "object" && "value" in firstField
+              ? (firstField as any).value
+              : String(firstField);
+        } else {
+          // Se não é array, verifica se tem propriedade value
+          title =
+            typeof titleField === "object" && "value" in titleField
+              ? (titleField as any).value
+              : String(titleField);
+        }
+      }
+
+      const { title: validatedTitle } = createGallerySchema.parse({ title });
+
+      const filename = `${Date.now()}-${Math.random()
+        .toString(36)
+        .substring(7)}.${data.filename?.split(".").pop()}`;
+      const filepath = path.join(process.cwd(), "uploads", filename);
+
+      await pipeline(data.file, createWriteStream(filepath));
+
+      const gallery = await prisma.gallery.create({
+        data: {
+          title: validatedTitle,
+          image: filename,
+          active: true,
+        },
+      });
+
+      return reply.status(201).send(gallery);
+    } catch (error) {
+      console.error("Erro ao criar galeria:", error);
+      return reply.status(500).send({ error: "Erro interno do servidor" });
+    }
+  }
+
+  async update(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { id } = paramsSchema.parse(request.params);
+
+      const existingGallery = await prisma.gallery.findUnique({
+        where: { id },
+      });
+
+      if (!existingGallery) {
+        return reply.status(404).send({ error: "Galeria não encontrada" });
+      }
+
+      const data = await request.file();
+      let updateData: any = {};
+
+      if (data) {
+        // Corrigindo o acesso aos campos do multipart
+        let title = "";
+        if (data.fields && data.fields.title) {
+          const titleField = data.fields.title;
+          if (Array.isArray(titleField)) {
+            // Se é array, pega o primeiro elemento e acessa o valor
+            const firstField = titleField[0];
+            title =
+              typeof firstField === "object" && "value" in firstField
+                ? (firstField as any).value
+                : String(firstField);
+          } else {
+            // Se não é array, verifica se tem propriedade value
+            title =
+              typeof titleField === "object" && "value" in titleField
+                ? (titleField as any).value
+                : String(titleField);
+          }
         }
 
-        const galleryExist = await prisma.gallery.findFirst({
-            where: {
-                title,
-                NOT: { id: Number(galleryId) }
-            },
-        });
-
-        if (galleryExist) {
-            return reply.status(400).send({
-                error: "Bad Request",
-                message: "Já existe uma galeria com esse título",
-            });
+        if (title) {
+          const { title: validatedTitle } = updateGallerySchema.parse({
+            title,
+          });
+          updateData.title = validatedTitle;
         }
 
-        const updated = await prisma.gallery.update({
-            where: { id: Number(galleryId) },
-            data: { title }
-        });
+        // Processar nova imagem
+        const filename = `${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(7)}.${data.filename?.split(".").pop()}`;
+        const filepath = path.join(process.cwd(), "uploads", filename);
 
-        return reply.status(200).send({ message: "Galeria atualizada com sucesso", gallery: updated });
+        await pipeline(data.file, createWriteStream(filepath));
+        updateData.image = filename;
+
+        // Remover imagem antiga
+        try {
+          await unlink(
+            path.join(process.cwd(), "uploads", existingGallery.image)
+          );
+        } catch (error) {
+          console.log("Erro ao remover imagem antiga:", error);
+        }
+      } else {
+        // Se não há arquivo, é apenas atualização de título
+        const { title } = updateGallerySchema.parse(request.body);
+        if (title) updateData.title = title;
+      }
+
+      const gallery = await prisma.gallery.update({
+        where: { id },
+        data: updateData,
+      });
+
+      return reply.send(gallery);
     } catch (error) {
-        return reply.status(500).send({
-            error: "Internal Server Error",
-            message: error.message,
-        });
-    } finally {
-        await prisma.$disconnect();
+      console.error("Erro ao atualizar galeria:", error);
+      return reply.status(500).send({ error: "Erro interno do servidor" });
     }
-};
+  }
 
-export const listGallery = async (request, reply) => {
-    const { limit, offset, search } = pagination(request);
-
+  async delete(request: FastifyRequest, reply: FastifyReply) {
     try {
-        const where: any = search
-            ? { titulo: { contains: search, mode: "insensitive" } }
-            : {};
+      const { id } = paramsSchema.parse(request.params);
 
-        const total = await prisma.gallery.count({ where });
-        const total_paginas = countPage(total, limit);
+      const gallery = await prisma.gallery.findUnique({
+        where: { id },
+      });
 
-        const rows = await prisma.gallery.findMany({
-            where,
-            orderBy: { id: "asc" },
-            skip: offset,
-            take: limit,
-            select: {
-                id: true,
-                title: true,
-                url: true,
-            },
-        });
+      if (!gallery) {
+        return reply.status(404).send({ error: "Galeria não encontrada" });
+      }
 
-        reply.send({
-            total_paginas,
-            rows,
-        });
+      // Remover arquivo de imagem
+      try {
+        await unlink(path.join(process.cwd(), "uploads", gallery.image));
+      } catch (error) {
+        console.log("Erro ao remover arquivo de imagem:", error);
+      }
+
+      await prisma.gallery.delete({
+        where: { id },
+      });
+
+      return reply.status(204).send();
     } catch (error) {
-        reply
-            .status(500)
-            .send({ error: "Internal Server Error", message: error.message });
-    } finally {
-        await prisma.$disconnect();
+      console.error("Erro ao deletar galeria:", error);
+      return reply.status(500).send({ error: "Erro interno do servidor" });
     }
-};
+  }
 
+  async toggleActive(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { id } = paramsSchema.parse(request.params);
+
+      const gallery = await prisma.gallery.findUnique({
+        where: { id },
+      });
+
+      if (!gallery) {
+        return reply.status(404).send({ error: "Galeria não encontrada" });
+      }
+
+      const updatedGallery = await prisma.gallery.update({
+        where: { id },
+        data: { active: !gallery.active },
+      });
+
+      return reply.send(updatedGallery);
+    } catch (error) {
+      console.error("Erro ao alterar status:", error);
+      return reply.status(500).send({ error: "Erro interno do servidor" });
+    }
+  }
+}

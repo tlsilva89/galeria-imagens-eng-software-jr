@@ -8,9 +8,12 @@ datasource db {
 }
 
 model Gallery {
-  id        Int      @id @default(autoincrement())
+  id        String   @id @default(cuid())
   title     String
-  filename  String?
-  url       String?
+  image     String
+  active    Boolean  @default(true)
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("galleries")
 }

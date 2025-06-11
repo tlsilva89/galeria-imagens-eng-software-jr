@@ -1,10 +1,24 @@
 import { FastifyInstance } from "fastify";
-import { galleryCreate, galleryUpdate, galleryUpload, listGallery } from "../controllers/galleryController";
+import { GalleryController } from "../controllers/galleryController";
 
-export async function galleryRouter(app: FastifyInstance) {
+const galleryController = new GalleryController();
 
-    app.get("/gallery", listGallery);
-    app.post("/gallery", galleryCreate);
-    app.post("/gallery/:galleryId/upload", galleryUpload);
+export async function galleryRoutes(fastify: FastifyInstance) {
+  // Listar galerias com paginação e filtros
+  fastify.get("/gallery", galleryController.list);
 
+  // Buscar galeria por ID
+  fastify.get("/gallery/:id", galleryController.getById);
+
+  // Criar nova galeria
+  fastify.post("/gallery", galleryController.create);
+
+  // Atualizar galeria
+  fastify.put("/gallery/:id", galleryController.update);
+
+  // Deletar galeria
+  fastify.delete("/gallery/:id", galleryController.delete);
+
+  // Ativar/Desativar galeria
+  fastify.patch("/gallery/:id/active", galleryController.toggleActive);
 }

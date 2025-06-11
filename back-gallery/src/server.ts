@@ -1,45 +1,38 @@
 import fastify from "fastify";
 import cors from "@fastify/cors";
-import multipart from '@fastify/multipart';
-import dotenv from "dotenv";
-import { resolve } from 'path';
-import { galleryRouter } from "./routes/galleryRouter";
+import multipart from "@fastify/multipart";
+import { galleryRoutes } from "./routes/galleryRouter";
 
+const server = fastify({ logger: true });
 
-dotenv.config();
-
-export const app = fastify({});
-
-
-app.register(multipart);
-
-app.register(require('@fastify/static'), {
-  root: resolve(__dirname, '../uploads'),
-  prefix: '/uploads',
+// Registrar plugins
+server.register(cors, {
+  origin: ["http://localhost:3000"],
 });
 
-app.register(cors, {
-  origin: (origin, callback) => {
-    const allowedOrigins = [
-      'http://localhost:3000',
-    ];
-
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    }
+server.register(multipart, {
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
   },
-  credentials: true, // Permite cookies ou cabeçalhos de autenticação
 });
 
-app.register(galleryRouter);
+// Servir arquivos estáticos
+server.register(require("@fastify/static"), {
+  root: require("path").join(__dirname, "..", "uploads"),
+  prefix: "/uploads/",
+});
 
+// Registrar rotas
+server.register(galleryRoutes);
 
+const start = async () => {
+  try {
+    await server.listen({ port: 3001, host: "0.0.0.0" });
+    console.log("Servidor rodando na porta 3001");
+  } catch (err) {
+    server.log.error(err);
+    process.exit(1);
+  }
+};
 
-app
-  .listen({
-    port: 3333,
-    host: "0.0.0.0",
-  })
-  .then(() => {
-    console.log("HTTP server running on http://localhost:3333");
-  });
+start();
