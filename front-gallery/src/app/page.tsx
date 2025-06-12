@@ -1,17 +1,29 @@
-// front-gallery/src/app/page.tsx
 import { api } from "@/lib/api";
 import GalleryGrid from "./components/GalleryGrid";
+import Header from "./components/Header";
+import Navbar from "./components/Navbar";
 
 export const revalidate = 60; // ISR - revalidar a cada 60 segundos
 
 export default async function Home() {
-  const initialData = await api.getGalleries(1, 12, "all");
+  try {
+    const initialData = await api.getGalleries(1, 12, "all");
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="container mx-auto px-4 py-8">
+    return (
+      <main>
+        <Navbar />
+        <Header />
         <GalleryGrid initialData={initialData} />
-      </div>
-    </div>
-  );
+      </main>
+    );
+  } catch (error) {
+    console.error("Erro ao carregar dados:", error);
+    return (
+      <main>
+        <Navbar />
+        <Header />
+        <GalleryGrid />
+      </main>
+    );
+  }
 }
